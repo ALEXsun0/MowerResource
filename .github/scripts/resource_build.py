@@ -67,8 +67,15 @@ def load_res_version():
 
 
 def load_package_spec():
+    """打包文件集：必须与生成器算内容哈希用的 package_file_paths 对齐。
+
+    生成器按 res_version.package_file_paths 计算内容哈希，文件存在时含
+    RES_PACKAGE_OPTIONAL_MODELS；打包漏掉它们会让 zip 自身「声明哈希 ≠ 包内容」，
+    也会让装了外部包的用户拿不到这些模型。老版本 res_version 没有该常量时按空处理。
+    """
     mod = load_res_version()
-    return mod.RES_PACKAGE_DIRS, mod.RES_PACKAGE_MODELS, mod.RES_PACKAGE_DATA
+    optional = getattr(mod, "RES_PACKAGE_OPTIONAL_MODELS", ())
+    return mod.RES_PACKAGE_DIRS, mod.RES_PACKAGE_MODELS + optional, mod.RES_PACKAGE_DATA
 
 
 def work_dir() -> Path:
@@ -278,14 +285,32 @@ def run_generation(fonts_dir: Path) -> None:
     )
 
 
+EXCEL_REL = Path("ArknightsGameResource/gamedata/excel")
+
+
+def load_mastery_source() -> dict:
+    """专精分支源表：character_table 合并 char_patch_table.patchChars。
+
+    主仓库 alpha 的 auto_get_res_new.py 用 `干员表 | patchChars` 生成 characters，
+    阿米娅近卫/医疗形态只存在于 patchChars；只查 character_table 会把合法形态判成
+    「分支缺失」并中止出包。patch 表缺失或没有 patchChars 时退回原表。
+    """
+    excel = mower_dir() / EXCEL_REL
+    source = json.loads((excel / "character_table.json").read_text(encoding="utf-8"))
+    patch_file = excel / "char_patch_table.json"
+    if patch_file.is_file():
+        patch_chars = json.loads(patch_file.read_text(encoding="utf-8")).get(
+            "patchChars"
+        )
+        if isinstance(patch_chars, dict):
+            source = {**source, **patch_chars}
+    return source
+
+
 def validate_mastery_branches() -> None:
     """发布前核对专精干员分支；不改产物，保持生成阶段的内容哈希有效。"""
     root = mower_dir()
-    source = json.loads(
-        (root / "ArknightsGameResource/gamedata/excel/character_table.json").read_text(
-            encoding="utf-8"
-        )
-    )
+    source = load_mastery_source()
     data = json.loads(
         (root / "arknights_mower/data/skill_data.json").read_text(encoding="utf-8")
     )
@@ -300,6 +325,7 @@ def validate_mastery_branches() -> None:
                 f"专精干员 {char_id} 分支缺失或与源数据不一致："
                 f"subProfessionId={actual!r}，源值={expected!r}。"
                 "请检查主仓库 alpha 的 auto_get_res_new.py 是否保留 subProfessionId"
+                "（源表 = character_table + char_patch_table.patchChars）"
             )
     print(f"专精干员分支校验通过（{len(characters)} 名）")
 
